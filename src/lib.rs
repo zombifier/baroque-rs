@@ -228,6 +228,9 @@ pub mod baroque {
             squares.insert(Coord::new(0, 0), Piece::new(Side::White, PieceType::Coordinator));
             squares.insert(Coord::new(0, 7), Piece::new(Side::Black, PieceType::Coordinator));
 
+            squares.insert(Coord::new(7, 0), Piece::new(Side::White, PieceType::Immobilizer));
+            squares.insert(Coord::new(7, 7), Piece::new(Side::Black, PieceType::Immobilizer));
+
             squares.insert(Coord::new(1, 0), Piece::new(Side::White, PieceType::LongLeaper));
             squares.insert(Coord::new(1, 7), Piece::new(Side::Black, PieceType::LongLeaper));
             squares.insert(Coord::new(6, 0), Piece::new(Side::White, PieceType::LongLeaper));
@@ -250,6 +253,42 @@ pub mod baroque {
             }
         }
 
+        pub fn display(&self) {
+            println!("");
+            for y in (0..BOARD_HEIGHT).rev() {
+                print!("{}  ", y);
+                for x in 0..BOARD_WIDTH {
+                    let character = match self.get_piece(Coord::new(x, y)) {
+                        None => '.',
+                        Some((piece, _)) => match (piece.get_side(), piece.get_type()) {
+                            (Side::White, PieceType::King) => '♔',
+                            (Side::White, PieceType::Withdrawer) => '♕',
+                            (Side::White, PieceType::Coordinator) => '♖',
+                            (Side::White, PieceType::Chameleon) => '♗',
+                            (Side::White, PieceType::LongLeaper) => '♘',
+                            (Side::White, PieceType::Pincer) => '♙',
+                            (Side::White, PieceType::Immobilizer) => '⧖',
+                            (Side::Black, PieceType::King) => '♚',
+                            (Side::Black, PieceType::Withdrawer) => '♛',
+                            (Side::Black, PieceType::Coordinator) => '♜',
+                            (Side::Black, PieceType::Chameleon) => '♝',
+                            (Side::Black, PieceType::LongLeaper) => '♞',
+                            (Side::Black, PieceType::Pincer) => '♟',
+                            (Side::Black, PieceType::Immobilizer) => '⧗',
+                        }
+                    };
+                    print!(" {} ", character);
+                }
+                println!("\n");
+            }
+            print!("    ");
+            for x in 0..BOARD_WIDTH {
+                print!("{}  ", x);
+            }
+            println!("\n");
+        }
+
+        #[cfg(test)]
         fn put_piece(&mut self, p: Piece, c: Coord) {
             self.squares.insert(c, p);
         }
@@ -285,7 +324,7 @@ pub mod baroque {
             if !start.relative_direction(end).is_valid() {
                 return false;
             }
-            let mut walker = CoordWalk::new(start, end);
+            let walker = CoordWalk::new(start, end);
             self.get_pieces(&walker.collect::<Vec<Coord>>()).is_empty()
         }
 
@@ -310,7 +349,7 @@ pub mod baroque {
                 match self.state {
                     GameState::Turn(side) if side != piece.get_side() => {
                         return
-                            Err(format!("Cannot move {}, it is currently {}'s' turn", piece, side));
+                            Err(format!("Cannot move {}, it is currently {}'s turn", piece, side));
                     },
                     GameState::Victory(side) => {
                         return Err(format!("Game has ended; {} won", side));
@@ -347,6 +386,7 @@ pub mod baroque {
         }
 
         // For testing.
+        #[cfg(test)]
         fn is_immobilized(&self, coord: Coord) -> Option<bool> {
             self.get_piece(coord).map(|(p, c)| p.is_immobilized(self, c))
         }
@@ -554,7 +594,7 @@ pub mod baroque {
             }
             let mut previous_coord_has_piece = false;
             for c in CoordWalk::new(start, end) {
-                if let Some((piece, coord)) = board.get_piece(c) {
+                if let Some((piece, _)) = board.get_piece(c) {
                     // stop if we're not expecting a piece or is an ally
                     if previous_coord_has_piece || self.is_allied(piece) {
                         return false;
@@ -575,8 +615,16 @@ pub mod baroque {
                 Coord::new(position.get_x(), king_position.get_y()),
                 Coord::new(king_position.get_x(), position.get_y()),
             ].into_iter().filter(|c| board.get_piece(*c)
-                                 .map_or(false, |(piece, coord)| !self.is_allied(piece)))
+                                 .map_or(false, |(piece, _)| !self.is_allied(piece)))
                 .collect()
+        }
+
+        fn get_withdrawn_piece(&self, board: &Board, begin: Coord, end: Coord) -> Vec<Coord> {
+            match begin.adjacent_coord(end.relative_direction(begin))
+                .and_then(|c| board.get_piece(c)) {
+                    Some((piece, coord)) if !self.is_allied(piece) => vec![coord],
+                    _ => Vec::new(),
+                }
         }
 
         /**
@@ -668,11 +716,7 @@ pub mod baroque {
                         .collect(),
 
                     PieceType::Withdrawer =>
-                        match begin.adjacent_coord(end.relative_direction(begin))
-                        .and_then(|c| board.get_piece(c)) {
-                            Some((piece, coord)) if !self.is_allied(piece) => vec![coord],
-                            _ => Vec::new(),
-                        },
+                        self.get_withdrawn_piece(board, begin, end),
 
                     PieceType::Coordinator =>
                         self.get_coordinated_pieces(board, end),
