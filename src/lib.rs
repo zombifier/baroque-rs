@@ -377,11 +377,11 @@ pub mod baroque {
             let mut messages = Vec::new();
             let piece = self.squares.remove(&start).unwrap();
             messages.push(format!("Moving {} from {} to {}", piece, start, end));
-            self.squares.insert(end, piece);
             for c in removed_coords_list {
                 let removed_piece = self.squares.remove(&c).unwrap();
                 messages.push(format!("Captured {} at {}", removed_piece, c));
             }
+            self.squares.insert(end, piece);
             Ok(messages)
         }
 
