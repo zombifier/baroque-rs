@@ -288,6 +288,10 @@ pub mod baroque {
             println!("\n");
         }
 
+        pub fn get_squares(&self) -> &HashMap<Coord, Piece> {
+            &self.squares
+        }
+
         #[cfg(test)]
         fn put_piece(&mut self, p: Piece, c: Coord) {
             self.squares.insert(c, p);
@@ -385,6 +389,23 @@ pub mod baroque {
             Ok(messages)
         }
 
+        pub fn get_possible_moves(&self, side: Side) -> Vec<(Coord, Coord)> {
+            let mut result = Vec::new();
+            for (c, p) in self.squares.iter() {
+                if p.get_side() == side {
+                    for x in 0..BOARD_WIDTH {
+                        for y in 0..BOARD_HEIGHT {
+                            let end = Coord::new(x, y);
+                            if p.check_valid_move(self, *c, end).is_some() {
+                                result.push((*c, end));
+                            }
+                        }
+                    }
+                }
+            }
+            result
+        }
+
         // For testing.
         #[cfg(test)]
         fn is_immobilized(&self, coord: Coord) -> Option<bool> {
@@ -393,7 +414,7 @@ pub mod baroque {
     }
 
     #[derive(Copy, Clone, PartialEq)]
-    enum Side {
+    pub enum Side {
         Black,
         White,
     }
@@ -409,7 +430,7 @@ pub mod baroque {
     }
 
     #[derive(Copy, Clone, PartialEq)]
-    enum PieceType {
+    pub enum PieceType {
         King,
         Pincer,
         Withdrawer,
@@ -493,7 +514,7 @@ pub mod baroque {
      * leaping over them it cannot attempt to capture any other pieces since no
      * other pieces in the game can leap.
      */
-    struct Piece {
+    pub struct Piece {
         side: Side,
         piece_type: PieceType,
     }
@@ -975,3 +996,71 @@ pub mod baroque {
     }
 }
 
+pub mod players {
+    use super::baroque::*;
+    use std::io;
+    use rand::seq::SliceRandom;
+
+    fn read_line() -> io::Result<Vec<usize>> {
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input_coords: Vec<usize> = input.split(' ').filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if input_coords.len() != 4 {
+            Err(io::Error::new(io::ErrorKind::InvalidInput, "Four valid numbers were not provided"))
+        } else {
+            Ok(input_coords)
+        }
+    }
+
+    pub trait Player {
+        fn get_side(&self) -> Side;
+        fn play(&self, board: &Board) -> Option<(Coord, Coord)>;
+    }
+
+    pub struct Human {
+        side: Side,
+    }
+
+    impl Human {
+        pub fn new(side: Side) -> Human {
+            Human {side}
+        }
+    }
+
+    impl Player for Human {
+        fn get_side(&self) -> Side { self.side }
+        fn play(&self, _: &Board) -> Option<(Coord, Coord)> {
+            loop {
+                match read_line() {
+                    Ok(input) => {
+                        return Some((Coord::new(input[0], input[1]),
+                        Coord::new(input[2], input[3])));
+                    },
+                    Err(e) => {
+                        println!("{}", e);
+                        continue;
+                    },
+                }
+            }
+        }
+    }
+
+    pub struct AI {
+        side: Side,
+    }
+
+    impl AI {
+        pub fn new(side: Side) -> AI {
+            AI {side}
+        }
+    }
+
+    impl Player for AI {
+        fn get_side(&self) -> Side { self.side }
+        fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
+            let mut rng = rand::thread_rng();
+            board.get_possible_moves(self.side).choose(&mut rng).cloned()
+        }
+    }
+}
