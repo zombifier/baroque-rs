@@ -830,7 +830,7 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(3, 4));
             board.put_piece(Piece::new(Side::Black, PieceType::Withdrawer), Coord::new(4, 4));
             board.put_piece(Piece::new(Side::Black, PieceType::King), Coord::new(3, 6));
-            assert!(board.make_move(Coord::new(6, 3), Coord::new(3, 3)).is_ok());
+            board = board.make_move(Coord::new(6, 3), Coord::new(3, 3)).0.unwrap();
             assert!(board.get_piece(Coord::new(2, 3)).is_none());
             assert!(board.get_piece(Coord::new(3, 4)).is_none());
             assert!(board.get_piece(Coord::new(3, 2)).is_some());
@@ -849,7 +849,7 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::Chameleon), Coord::new(7, 5));
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(6, 6));
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(7, 6));
-            assert!(board.make_move(Coord::new(6, 5), Coord::new(3, 2)).is_ok());
+            board = board.make_move(Coord::new(6, 5), Coord::new(3, 2)).0.unwrap();
             assert!(board.get_piece(Coord::new(7, 6)).is_none());
             assert!(board.get_piece(Coord::new(6, 6)).is_some());
             assert!(board.get_piece(Coord::new(7, 5)).is_some());
@@ -871,9 +871,9 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::Coordinator), Coord::new(3, 6));
             board.put_piece(Piece::new(Side::Black, PieceType::Withdrawer), Coord::new(5, 3));
             board.put_piece(Piece::new(Side::Black, PieceType::King), Coord::new(6, 2));
-            assert!(board.make_move(Coord::new(3, 1), Coord::new(1, 3)).is_err());
-            assert!(board.make_move(Coord::new(3, 1), Coord::new(7, 1)).is_err());
-            assert!(board.make_move(Coord::new(3, 1), Coord::new(3, 7)).is_ok());
+            assert!(board.make_move(Coord::new(3, 1), Coord::new(1, 3)).0.is_none());
+            assert!(board.make_move(Coord::new(3, 1), Coord::new(7, 1)).0.is_none());
+            board = board.make_move(Coord::new(3, 1), Coord::new(3, 7)).0.unwrap();
             assert!(board.get_piece(Coord::new(3, 2)).is_none());
             assert!(board.get_piece(Coord::new(3, 4)).is_none());
             assert!(board.get_piece(Coord::new(3, 6)).is_none());
@@ -891,7 +891,7 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::King), Coord::new(6, 4));
             board.put_piece(Piece::new(Side::Black, PieceType::LongLeaper), Coord::new(2, 5));
             board.put_piece(Piece::new(Side::Black, PieceType::Chameleon), Coord::new(4, 5));
-            assert!(board.make_move(Coord::new(3, 3), Coord::new(5, 5)).is_ok());
+            board = board.make_move(Coord::new(3, 3), Coord::new(5, 5)).0.unwrap();
             assert!(board.get_piece(Coord::new(5, 1)).is_none());
             assert!(board.get_piece(Coord::new(2, 5)).is_none());
         }
@@ -924,7 +924,7 @@ pub mod baroque {
             assert_eq!(board.is_immobilized(Coord::new(4, 5)), Some(false));
             assert_eq!(board.is_immobilized(Coord::new(3, 5)), Some(false));
 
-            assert!(board.make_move(Coord::new(5, 2), Coord::new(3, 4)).is_ok());
+            board = board.make_move(Coord::new(5, 2), Coord::new(3, 4)).0.unwrap();
             // The black Leaper is no longer frozen as the Immobilizer is away.
             assert_eq!(board.is_immobilized(Coord::new(6, 3)), Some(false));
             // The black King is fine, as expected.
@@ -937,7 +937,7 @@ pub mod baroque {
             // Now we move the Black Immobilizer in. Per the Cambridge rules,
             // the two opposing Immobilizers will freeze each other while the
             // other pieces are free.
-            assert!(board.make_move(Coord::new(2, 7), Coord::new(2, 5)).is_ok());
+            board = board.make_move(Coord::new(2, 7), Coord::new(2, 5)).0.unwrap();
             assert_eq!(board.is_immobilized(Coord::new(2, 4)), Some(false));
             assert_eq!(board.is_immobilized(Coord::new(3, 3)), Some(false));
             assert_eq!(board.is_immobilized(Coord::new(4, 5)), Some(false));
@@ -976,7 +976,7 @@ pub mod baroque {
         fn test_chameleon_no_leaper() {
             let mut board = test_chameleon_common_board();
             assert_eq!(board.is_immobilized(Coord::new(2, 3)), Some(true));
-            assert!(board.make_move(Coord::new(6, 5), Coord::new(2, 5)).is_ok());
+            board = board.make_move(Coord::new(6, 5), Coord::new(2, 5)).0.unwrap();
             assert!(board.get_piece(Coord::new(7, 5)).is_none());
             assert!(board.get_piece(Coord::new(2, 4)).is_none());
             assert!(board.get_piece(Coord::new(1, 5)).is_none());
@@ -991,7 +991,7 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::LongLeaper), Coord::new(5, 5));
             board.put_piece(Piece::new(Side::Black, PieceType::LongLeaper), Coord::new(3, 5));
             assert_eq!(board.is_immobilized(Coord::new(2, 3)), Some(true));
-            assert!(board.make_move(Coord::new(6, 5), Coord::new(2, 5)).is_ok());
+            board = board.make_move(Coord::new(6, 5), Coord::new(2, 5)).0.unwrap();
             assert!(board.get_piece(Coord::new(5, 5)).is_none());
             assert!(board.get_piece(Coord::new(3, 4)).is_none());
             assert!(board.get_piece(Coord::new(7, 5)).is_some());
