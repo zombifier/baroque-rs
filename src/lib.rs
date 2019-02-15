@@ -18,8 +18,8 @@ pub mod baroque {
     use std::fmt;
     use std::collections::HashMap;
 
-    const BOARD_WIDTH: usize = 8;
-    const BOARD_HEIGHT: usize = 8;
+    pub const BOARD_WIDTH: usize = 8;
+    pub const BOARD_HEIGHT: usize = 8;
 
     // TODO: Switch to a more general, -1/0/+1 system.
     #[derive(Copy, Clone, PartialEq)]
@@ -256,7 +256,7 @@ pub mod baroque {
         pub fn display(&self) {
             println!("");
             for y in (0..BOARD_HEIGHT).rev() {
-                print!("{}  ", y);
+                print!("{}  ", y + 1);
                 for x in 0..BOARD_WIDTH {
                     let character = match self.get_piece(Coord::new(x, y)) {
                         None => '.',
@@ -283,9 +283,10 @@ pub mod baroque {
             }
             print!("    ");
             for x in 0..BOARD_WIDTH {
-                print!("{}  ", x);
+                print!("{}  ", char::from_u32('a' as u32 + x as u32).unwrap());
             }
             println!("\n");
+
         }
 
         pub fn get_squares(&self) -> &HashMap<Coord, Piece> {
@@ -346,47 +347,53 @@ pub mod baroque {
         }
 
         // Now the game logic functions
-        pub fn make_move(&mut self, start: Coord, end: Coord) -> Result<Vec<String>, String> {
-            let removed_coords_list;
-            // Borrows self.squares immutably to check whether a move is valid ot not.
+
+        // Make the specified move, and if the move is valid 
+        // return a new state of the board with the move made.
+        // TODO: Handle checkmate and victory
+        pub fn make_move(&self, start: Coord, end: Coord) -> (Option<Board>, Vec<String>){
+            let mut messages = Vec::new();
+            let mut new_board_option = None;
             if let Some((piece, _)) = self.get_piece(start) {
                 match self.state {
                     GameState::Turn(side) if side != piece.get_side() => {
-                        return
-                            Err(format!("Cannot move {}, it is currently {}'s turn", piece, side));
+                        messages.push(
+                            format!("Cannot move {}, it is currently {}'s turn", piece, side));
                     },
                     GameState::Victory(side) => {
-                        return Err(format!("Game has ended; {} won", side));
+                        messages.push(format!("Game has ended; {} won", side));
                     },
                     _ => (),
                 }
                 if let Some(captured_coords) = piece.check_valid_move(self, start, end) {
-                    removed_coords_list = captured_coords;
-                    self.state = match piece.get_side() {
-                        Side::Black => GameState::Turn(Side::White),
-                        Side::White => GameState::Turn(Side::Black),
+                    // Now we construct a new iteration of the board to return.
+                    // unwrap()'s are safe here because we have checked for piece
+                    // existence above. And if something went wrong then we want it to
+                    // panic anyway.
+                    let mut new_board = Board {
+                        state: match piece.get_side() {
+                            Side::Black => GameState::Turn(Side::White),
+                            Side::White => GameState::Turn(Side::Black),
+                        },
+                        squares: self.squares.clone(),
                     };
+                    let piece = new_board.squares.remove(&start).unwrap();
+                    messages.push(format!("Moving {} from {} to {}", piece, start, end));
+                    for c in captured_coords {
+                        let removed_piece = new_board.squares.remove(&c).unwrap();
+                        messages.push(format!("Captured {} at {}", removed_piece, c));
+                    }
+                    new_board.squares.insert(end, piece);
+                    new_board_option = Some(new_board);
                 } else {
-                    return Err(format!("{} from {} to {} is an invalid move", piece, start, end));
+                    messages.push(
+                        format!("{} from {} to {} is an invalid move", piece, start, end));
                 }
 
             } else {
-                return Err(format!("No piece detected at {}.", start));
+                messages.push(format!("No piece detected at {}.", start));
             }
-            // We mutate self.squares here, after returning all immutable
-            // references to it taken above to ensure memory safety.
-            // unwrap()'s are safe here because we have checked for piece
-            // existence above. And if something went wrong then we want it to
-            // panic anyway.
-            let mut messages = Vec::new();
-            let piece = self.squares.remove(&start).unwrap();
-            messages.push(format!("Moving {} from {} to {}", piece, start, end));
-            for c in removed_coords_list {
-                let removed_piece = self.squares.remove(&c).unwrap();
-                messages.push(format!("Captured {} at {}", removed_piece, c));
-            }
-            self.squares.insert(end, piece);
-            Ok(messages)
+            (new_board_option, messages)
         }
 
         pub fn get_possible_moves(&self, side: Side) -> Vec<(Coord, Coord)> {
@@ -514,6 +521,7 @@ pub mod baroque {
      * leaping over them it cannot attempt to capture any other pieces since no
      * other pieces in the game can leap.
      */
+    #[derive(Copy, Clone)]
     pub struct Piece {
         side: Side,
         piece_type: PieceType,
@@ -1002,15 +1010,20 @@ pub mod players {
     use rand::seq::SliceRandom;
 
     fn read_line() -> io::Result<Vec<usize>> {
+        let mut result = Vec::new();
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        let input_coords: Vec<usize> = input.split(' ').filter_map(|s| s.trim().parse().ok())
-            .collect();
-        if input_coords.len() != 4 {
-            Err(io::Error::new(io::ErrorKind::InvalidInput, "Four valid numbers were not provided"))
-        } else {
-            Ok(input_coords)
+        for position in input.split(' ') {
+            let mut chars = position.chars();
+            let row = chars.next().map(|c| c as usize - 'a' as usize).unwrap_or(BOARD_WIDTH);
+            let col = chars.next().and_then(|c| c.to_digit(10))
+                .map(|n| (n-1) as usize).unwrap_or(BOARD_HEIGHT);
+            if row != BOARD_WIDTH && col != BOARD_HEIGHT {
+                result.push(row);
+                result.push(col);
+            }
         }
+        Ok(result)
     }
 
     pub trait Player {
