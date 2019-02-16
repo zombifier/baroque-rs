@@ -413,6 +413,28 @@ pub mod baroque {
             result
         }
 
+        pub fn get_value(&self) -> i32 {
+            let mut result = 0;
+            for (c, p) in self.squares.iter() {
+                let mut value = match p.get_type() {
+                    // These values are speculative.
+                    _ if p.is_immobilized(self, *c) => 0,
+                    PieceType::King => 900,
+                    PieceType::Pincer => 30,
+                    PieceType::Withdrawer => 50,
+                    PieceType::LongLeaper => 90,
+                    PieceType::Coordinator => 30,
+                    PieceType::Immobilizer => 30,
+                    PieceType::Chameleon => 30,
+                };
+                if p.get_side() == Side::Black {
+                    value = -value;
+                }
+                result += value;
+            }
+            result
+        }
+
         // For testing.
         #[cfg(test)]
         fn is_immobilized(&self, coord: Coord) -> Option<bool> {
@@ -1007,6 +1029,7 @@ pub mod baroque {
 pub mod players {
     use super::baroque::*;
     use std::io;
+    use std::cmp;
     use rand::seq::SliceRandom;
 
     fn read_line() -> io::Result<Vec<usize>> {
@@ -1046,7 +1069,7 @@ pub mod players {
         fn play(&self, _: &Board) -> Option<(Coord, Coord)> {
             loop {
                 match read_line() {
-                    Ok(input) => {
+                    Ok(ref input) if input.len() == 4 => {
                         return Some((Coord::new(input[0], input[1]),
                         Coord::new(input[2], input[3])));
                     },
@@ -1054,26 +1077,75 @@ pub mod players {
                         println!("{}", e);
                         continue;
                     },
+                    _ => {
+                        println!("Invalid input!");
+                        continue;
+                    }
+
                 }
             }
         }
     }
 
-    pub struct AI {
+    pub struct RandomAI {
         side: Side,
     }
 
-    impl AI {
-        pub fn new(side: Side) -> AI {
-            AI {side}
+    // CHAOS, CHAOS! I CAN DO ANYTHING!
+    // This AI picks a random valid move and just go with it.
+    impl RandomAI {
+        pub fn new(side: Side) -> RandomAI {
+            RandomAI {side}
         }
     }
 
-    impl Player for AI {
+    impl Player for RandomAI {
         fn get_side(&self) -> Side { self.side }
         fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
             let mut rng = rand::thread_rng();
             board.get_possible_moves(self.side).choose(&mut rng).cloned()
+        }
+    }
+
+    pub struct ValueAI {
+        side: Side,
+    }
+
+    // This AI is slightly more sophisticated; it will consider the values of
+    // the pieces on the board, and only that. It will pick the move that will
+    // result in the board with the most value for itself; this means that if it
+    // can capture (or freeze a bunch of units) with a move then it will go for
+    // it immediately. If there are multiple moves that result in the same best
+    // possible outcome, pick one at random.
+    impl ValueAI {
+        pub fn new(side: Side) -> ValueAI {
+            ValueAI {side}
+        }
+    }
+
+    impl Player for ValueAI {
+        fn get_side(&self) -> Side { self.side }
+        fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
+            let mut valuable_moves_list = Vec::new();
+            let mut current_value = None;
+            let mut rng = rand::thread_rng();
+            for (begin, end) in board.get_possible_moves(self.side) {
+                // unwrap() because we are guaranteed the move is valid.
+                // (we want to panic if it's not the case et cetera.)
+                let new_value = board.make_move(begin, end).0.unwrap().get_value();
+                let condition = match self.side {
+                    Side::White => new_value > *current_value.as_ref().unwrap_or(&(new_value-1)),
+                    Side::Black => new_value < *current_value.as_ref().unwrap_or(&(new_value+1)),
+                };
+                if condition {
+                    valuable_moves_list.clear();
+                    current_value.replace(new_value);
+                } 
+                if new_value == *current_value.as_ref().unwrap_or(&new_value) {
+                    valuable_moves_list.push((begin, end));
+                }
+            }
+            valuable_moves_list.choose(&mut rng).cloned()
         }
     }
 }

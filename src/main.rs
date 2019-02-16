@@ -5,7 +5,7 @@ use baroque::players::*;
 fn main() {
     let mut board = Board::new_board();
     let white = Human::new(Side::White);
-    let black = AI::new(Side::Black);
+    let black = ValueAI::new(Side::Black);
     let mut current_player: &Player = &white; 
     loop {
         board.display();
