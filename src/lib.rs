@@ -419,15 +419,17 @@ pub mod baroque {
             for (c, p) in self.squares.iter() {
                 let mut value = match p.get_type() {
                     // These values are speculative.
-                    _ if p.is_immobilized(self, *c) => 0,
                     PieceType::King => 900,
                     PieceType::Pincer => 30,
-                    PieceType::Withdrawer => 50,
-                    PieceType::LongLeaper => 90,
+                    PieceType::Withdrawer => 30,
+                    PieceType::LongLeaper => 50,
                     PieceType::Coordinator => 30,
                     PieceType::Immobilizer => 30,
                     PieceType::Chameleon => 30,
                 };
+                if p.is_immobilized(self, *c) {
+                    value /= 2;
+                }
                 if p.get_side() == self.current_side {
                     value = -value;
                 }
