@@ -8,9 +8,6 @@
  * To play, create a blank Board using Board::new_board(), then
  * feed it moves via make_move.
  * This is very WIP. Ugly-ass code below.
- * TODO: Only the engine is partially completed, no winning condition (capturing
- * the king will keep the game going until it crashes when you try to move a
- * Coordinator)
  */
 pub mod baroque {
     use std::char;
@@ -199,21 +196,16 @@ pub mod baroque {
         }
     }
 
-    enum GameState {
-        Turn(Side),
-        Victory(Side),
-    }
-
     pub struct Board {
         squares: HashMap<Coord, Piece>,
-        state: GameState
+        current_side: Side
     }
 
     impl Board {
         pub fn new_blank_board() -> Board {
             Board {
                 squares: HashMap::new(),
-                state: GameState::Turn(Side::White),
+                current_side: Side::White,
             }
         }
 
@@ -249,8 +241,12 @@ pub mod baroque {
 
             Board {
                 squares,
-                state: GameState::Turn(Side::White),
+                current_side: Side::White,
             }
+        }
+
+        pub fn get_current_side(&self) -> Side {
+            self.current_side
         }
 
         pub fn display(&self) {
@@ -336,59 +332,61 @@ pub mod baroque {
         /**
          * Get the position of the King.
          */
-        fn get_king_position(&self, side: Side) -> Coord {
+        fn get_king_position(&self, side: Side) -> Option<Coord> {
             for (c, p) in self.squares.iter() {
                 if p.get_type() == PieceType::King &&
                     p.get_side() == side {
-                        return *c;
+                        return Some(*c);
                     }
             }
-            panic!("Cannot find King???");
+            None
         }
 
         // Now the game logic functions
 
         // Make the specified move, and if the move is valid 
         // return a new state of the board with the move made.
-        // TODO: Handle checkmate and victory
-        pub fn make_move(&self, start: Coord, end: Coord) -> (Option<Board>, Vec<String>){
+        pub fn make_move(&self, start: Coord, end: Coord) -> (Option<Board>, Vec<String>) {
+            self.make_move_internal(start, end, true)
+        }
+
+        fn make_move_internal(&self, start: Coord, end: Coord, check: bool) ->
+            (Option<Board>, Vec<String>) {
             let mut messages = Vec::new();
             let mut new_board_option = None;
             if let Some((piece, _)) = self.get_piece(start) {
-                match self.state {
-                    GameState::Turn(side) if side != piece.get_side() => {
-                        messages.push(
-                            format!("Cannot move {}, it is currently {}'s turn", piece, side));
-                    },
-                    GameState::Victory(side) => {
-                        messages.push(format!("Game has ended; {} won", side));
-                    },
-                    _ => (),
-                }
-                if let Some(captured_coords) = piece.check_valid_move(self, start, end) {
-                    // Now we construct a new iteration of the board to return.
-                    // unwrap()'s are safe here because we have checked for piece
-                    // existence above. And if something went wrong then we want it to
-                    // panic anyway.
-                    let mut new_board = Board {
-                        state: match piece.get_side() {
-                            Side::Black => GameState::Turn(Side::White),
-                            Side::White => GameState::Turn(Side::Black),
-                        },
-                        squares: self.squares.clone(),
-                    };
-                    let piece = new_board.squares.remove(&start).unwrap();
-                    messages.push(format!("Moving {} from {} to {}", piece, start, end));
-                    for c in captured_coords {
-                        let removed_piece = new_board.squares.remove(&c).unwrap();
-                        messages.push(format!("Captured {} at {}", removed_piece, c));
-                    }
-                    new_board.squares.insert(end, piece);
-                    new_board_option = Some(new_board);
-                } else {
+                if self.current_side != piece.get_side() {
                     messages.push(
-                        format!("{} from {} to {} is an invalid move", piece, start, end));
-                }
+                        format!("Cannot move {}, it is currently {}'s turn",
+                                piece, self.current_side));
+                } else if let Some(captured_coords) = piece.check_valid_move(self, start, end) {
+                        // Now we construct a new iteration of the board to return.
+                        // unwrap()'s are safe here because we have checked for piece
+                        // existence above. And if something went wrong then we want it to
+                        // panic anyway.
+                        let mut new_board = Board {
+                            current_side: self.current_side.flip(),
+                            squares: self.squares.clone(),
+                        };
+                        let piece = new_board.squares.remove(&start).unwrap();
+                        messages.push(format!("Moving {} from {} to {}", piece, start, end));
+                        for c in captured_coords {
+                            let removed_piece = new_board.squares.remove(&c).unwrap();
+                            messages.push(format!("Captured {} at {}", removed_piece, c));
+                        }
+                        new_board.squares.insert(end, piece);
+                        // if this move would put your own king in check then don't do it
+                        if check && new_board.is_in_check(self.current_side) {
+                            messages.push(
+                                format!("Cannot make move, it would leave the {} King in check",
+                                        self.current_side));
+                        } else {
+                            new_board_option = Some(new_board);
+                        }
+                    } else {
+                        messages.push(
+                            format!("{} from {} to {} is an invalid move", piece, start, end));
+                    }
 
             } else {
                 messages.push(format!("No piece detected at {}.", start));
@@ -396,16 +394,19 @@ pub mod baroque {
             (new_board_option, messages)
         }
 
-        pub fn get_possible_moves(&self, side: Side) -> Vec<(Coord, Coord)> {
-            let mut result = Vec::new();
-            for (c, p) in self.squares.iter() {
-                if p.get_side() == side {
-                    for x in 0..BOARD_WIDTH {
-                        for y in 0..BOARD_HEIGHT {
-                            let end = Coord::new(x, y);
-                            if p.check_valid_move(self, *c, end).is_some() {
-                                result.push((*c, end));
-                            }
+        // Get a list of all possible moves and associated next board state.
+        pub fn get_possible_moves(&self) -> HashMap<(Coord, Coord), Board> {
+            self.get_possible_moves_internal(true)
+        }
+
+        fn get_possible_moves_internal(&self, check: bool) -> HashMap<(Coord, Coord), Board> {
+            let mut result = HashMap::new();
+            for (c, _) in self.squares.iter() {
+                for x in 0..BOARD_WIDTH {
+                    for y in 0..BOARD_HEIGHT {
+                        let end = Coord::new(x, y);
+                        if let Some(new_board) = self.make_move_internal(*c, end, check).0 {
+                            result.insert((*c, end), new_board);
                         }
                     }
                 }
@@ -427,12 +428,22 @@ pub mod baroque {
                     PieceType::Immobilizer => 30,
                     PieceType::Chameleon => 30,
                 };
-                if p.get_side() == Side::Black {
+                if p.get_side() == self.current_side {
                     value = -value;
                 }
                 result += value;
             }
             result
+        }
+
+        // Check if the King with the provided side is in check.
+        pub fn is_in_check(&self, side: Side) -> bool {
+            let test_board = Board {
+                squares: self.squares.clone(),
+                current_side: side.flip(),
+            };
+            test_board.get_possible_moves_internal(false).into_iter()
+                .any(|(_, board)| board.get_king_position(side).is_none())
         }
 
         // For testing.
@@ -455,6 +466,15 @@ pub mod baroque {
                 Side::White => "White",
             };
             write!(f, "{}", name)
+        }
+    }
+
+    impl Side {
+        pub fn flip(&self) -> Side {
+            match self {
+                Side::Black => Side::White,
+                Side::White => Side::Black,
+            }
         }
     }
 
@@ -661,7 +681,7 @@ pub mod baroque {
         }
 
         fn get_coordinated_pieces(&self, board: &Board, position: Coord) -> Vec<Coord> {
-            let king_position = board.get_king_position(self.get_side());
+            let king_position = board.get_king_position(self.get_side()).unwrap();
             vec![
                 Coord::new(position.get_x(), king_position.get_y()),
                 Coord::new(king_position.get_x(), position.get_y()),
@@ -683,6 +703,8 @@ pub mod baroque {
          * position. If the move is valid, return a Some containing a vector
          * of coordinates that the move captured, since in Baroque no piece
          * other than the King actually capture by substitution.
+         * Does not care whether the move would put its own King in check;
+         * that's for the Board to keep track of.
          */
         fn check_valid_move(&self, board: &Board, begin: Coord, end: Coord) -> Option<Vec<Coord>> {
             if self.is_immobilized(board, begin) {
@@ -884,6 +906,7 @@ pub mod baroque {
 
             board.put_piece(Piece::new(Side::White, PieceType::Immobilizer), Coord::new(0, 1));
             board.put_piece(Piece::new(Side::White, PieceType::Pincer), Coord::new(2, 2));
+            board.put_piece(Piece::new(Side::White, PieceType::King), Coord::new(0, 7));
             board.put_piece(Piece::new(Side::Black, PieceType::Chameleon), Coord::new(3, 0));
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(1, 1));
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(5, 1));
@@ -991,6 +1014,7 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(2, 6));
             board.put_piece(Piece::new(Side::Black, PieceType::Coordinator), Coord::new(2, 0)); 
             board.put_piece(Piece::new(Side::Black, PieceType::Immobilizer), Coord::new(1, 4)); 
+            board.put_piece(Piece::new(Side::Black, PieceType::King), Coord::new(1, 6)); 
             board
         }
 
@@ -1029,7 +1053,6 @@ pub mod baroque {
 pub mod players {
     use super::baroque::*;
     use std::io;
-    use std::cmp;
     use rand::seq::SliceRandom;
 
     fn read_line() -> io::Result<Vec<usize>> {
@@ -1050,23 +1073,17 @@ pub mod players {
     }
 
     pub trait Player {
-        fn get_side(&self) -> Side;
         fn play(&self, board: &Board) -> Option<(Coord, Coord)>;
     }
 
     pub struct Human {
-        side: Side,
-    }
-
-    impl Human {
-        pub fn new(side: Side) -> Human {
-            Human {side}
-        }
     }
 
     impl Player for Human {
-        fn get_side(&self) -> Side { self.side }
-        fn play(&self, _: &Board) -> Option<(Coord, Coord)> {
+        fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
+            if board.get_possible_moves().is_empty() {
+                return None;
+            }
             loop {
                 match read_line() {
                     Ok(ref input) if input.len() == 4 => {
@@ -1088,27 +1105,19 @@ pub mod players {
     }
 
     pub struct RandomAI {
-        side: Side,
     }
 
     // CHAOS, CHAOS! I CAN DO ANYTHING!
     // This AI picks a random valid move and just go with it.
-    impl RandomAI {
-        pub fn new(side: Side) -> RandomAI {
-            RandomAI {side}
-        }
-    }
-
     impl Player for RandomAI {
-        fn get_side(&self) -> Side { self.side }
         fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
             let mut rng = rand::thread_rng();
-            board.get_possible_moves(self.side).choose(&mut rng).cloned()
+            board.get_possible_moves().iter().map(|(m, _)| m.clone())
+                .collect::<Vec<(Coord, Coord)>>().choose(&mut rng).cloned()
         }
     }
 
-    pub struct ValueAI {
-        side: Side,
+    pub struct EagerAI {
     }
 
     // This AI is slightly more sophisticated; it will consider the values of
@@ -1117,32 +1126,21 @@ pub mod players {
     // can capture (or freeze a bunch of units) with a move then it will go for
     // it immediately. If there are multiple moves that result in the same best
     // possible outcome, pick one at random.
-    impl ValueAI {
-        pub fn new(side: Side) -> ValueAI {
-            ValueAI {side}
-        }
-    }
-
-    impl Player for ValueAI {
-        fn get_side(&self) -> Side { self.side }
+    impl Player for EagerAI {
         fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
             let mut valuable_moves_list = Vec::new();
             let mut current_value = None;
             let mut rng = rand::thread_rng();
-            for (begin, end) in board.get_possible_moves(self.side) {
+            for (m, new_board) in board.get_possible_moves() {
                 // unwrap() because we are guaranteed the move is valid.
                 // (we want to panic if it's not the case et cetera.)
-                let new_value = board.make_move(begin, end).0.unwrap().get_value();
-                let condition = match self.side {
-                    Side::White => new_value > *current_value.as_ref().unwrap_or(&(new_value-1)),
-                    Side::Black => new_value < *current_value.as_ref().unwrap_or(&(new_value+1)),
-                };
-                if condition {
+                let new_value = new_board.get_value();
+                if new_value > *current_value.as_ref().unwrap_or(&(new_value-1)) {
                     valuable_moves_list.clear();
                     current_value.replace(new_value);
                 } 
                 if new_value == *current_value.as_ref().unwrap_or(&new_value) {
-                    valuable_moves_list.push((begin, end));
+                    valuable_moves_list.push(m);
                 }
             }
             valuable_moves_list.choose(&mut rng).cloned()
