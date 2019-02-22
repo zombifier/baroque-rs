@@ -44,6 +44,21 @@ pub mod baroque {
                 Direction { vertical: NS::O, horizontal: EW::W },
             ]
         }
+
+        fn get_opposite_direction(&self) -> Direction {
+            Direction {
+                horizontal: match self.horizontal {
+                    EW::O => EW::O,
+                    EW::E => EW::W,
+                    EW::W => EW::E,
+                },
+                vertical: match self.vertical {
+                    NS::O => NS::O,
+                    NS::N => NS::S,
+                    NS::S => NS::N,
+                },
+            }
+        }
     }
 
     /**
@@ -131,6 +146,17 @@ pub mod baroque {
             }
         }
 
+        fn pincing_coord(&self, c: Coord) -> Option<Coord> {
+            let direction = c.relative_direction(*self);
+            self.adjacent_coord(direction)
+        }
+
+        fn is_adjacent(&self, c: Coord) -> bool {
+            (self.x == c.x || self.x + 1 == c.x || c.x + 1 == self.x) &&
+                (self.y == c.y || self.y + 1 == c.y || c.y + 1 == self.y) &&
+                *self != c
+        }
+
         fn relative_direction(&self, c: Coord) -> Direction {
             let mut horizontal = EW::O;
             let mut vertical = NS::O;
@@ -185,6 +211,41 @@ pub mod baroque {
             // Don't spin in place or go nowhere.
             if !direction.is_valid() {
                 return None;
+            }
+            match self.current.adjacent_coord(direction) {
+                Some(c) if self.current != self.end => {
+                    self.current = c;
+                    Some(c)
+                },
+                _ => None,
+            }
+        }
+    }
+
+    struct CoordWalkInclusive {
+        current: Coord,
+        end: Coord,
+        started: bool
+    }
+
+    impl CoordWalkInclusive {
+        fn new(start: Coord, end: Coord) -> CoordWalkInclusive {
+            CoordWalkInclusive { current: start, end, started: false }
+        }
+    }
+
+    impl Iterator for CoordWalkInclusive{
+        type Item = Coord;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let direction = self.current.relative_direction(self.end);
+            // Don't spin in place or go nowhere.
+            if !direction.is_valid() {
+                return None;
+            }
+            if !self.started {
+                self.started = true;
+                return Some(self.current);
             }
             match self.current.adjacent_coord(direction) {
                 Some(c) if self.current != self.end => {
@@ -347,11 +408,6 @@ pub mod baroque {
         // Make the specified move, and if the move is valid 
         // return a new state of the board with the move made.
         pub fn make_move(&self, start: Coord, end: Coord) -> (Option<Board>, Vec<String>) {
-            self.make_move_internal(start, end, true)
-        }
-
-        fn make_move_internal(&self, start: Coord, end: Coord, check: bool) ->
-            (Option<Board>, Vec<String>) {
             let mut messages = Vec::new();
             let mut new_board_option = None;
             if let Some((piece, _)) = self.get_piece(start) {
@@ -376,7 +432,7 @@ pub mod baroque {
                         }
                         new_board.squares.insert(end, piece);
                         // if this move would put your own king in check then don't do it
-                        if check && new_board.is_in_check(self.current_side) {
+                        if new_board.is_in_check(self.current_side) {
                             messages.push(
                                 format!("Cannot make move, it would leave the {} King in check",
                                         self.current_side));
@@ -396,16 +452,12 @@ pub mod baroque {
 
         // Get a list of all possible moves and associated next board state.
         pub fn get_possible_moves(&self) -> HashMap<(Coord, Coord), Board> {
-            self.get_possible_moves_internal(true)
-        }
-
-        fn get_possible_moves_internal(&self, check: bool) -> HashMap<(Coord, Coord), Board> {
             let mut result = HashMap::new();
             for (c, _) in self.squares.iter() {
                 for x in 0..BOARD_WIDTH {
                     for y in 0..BOARD_HEIGHT {
                         let end = Coord::new(x, y);
-                        if let Some(new_board) = self.make_move_internal(*c, end, check).0 {
+                        if let Some(new_board) = self.make_move(*c, end).0 {
                             result.insert((*c, end), new_board);
                         }
                     }
@@ -439,13 +491,59 @@ pub mod baroque {
         }
 
         // Check if the King with the provided side is in check.
+        // TODO: Make it more general (can apply to any piece)
         pub fn is_in_check(&self, side: Side) -> bool {
-            let test_board = Board {
-                squares: self.squares.clone(),
-                current_side: side.flip(),
-            };
-            test_board.get_possible_moves_internal(false).into_iter()
-                .any(|(_, board)| board.get_king_position(side).is_none())
+            let king_position = self.get_king_position(side).unwrap();
+            // Since there are multiple pincers, we don't want to repeat this calculation
+            let vulnerable_pincing_positions = Direction::cardinal_directions().into_iter()
+                .filter_map(|dir| king_position.adjacent_coord(dir))
+                .filter_map(|c| self.get_piece(c))
+                .filter(|(p, _)| p.get_side() != side)
+                .filter_map(|(_, c)| king_position.pincing_coord(c))
+                .collect::<Vec<Coord>>();
+            for (coord, p) in self.squares.iter() {
+                if p.get_side() != side && !p.is_immobilized(self, *coord) {
+                    let is_vulnerable = match p.get_type() {
+                        // King and Chameleons imitating Kings can step 1 step into the square
+                        PieceType::King | PieceType::Chameleon => coord.is_adjacent(king_position),
+                        // Pincers must be able to move to a vulnerable square as calculated above
+                        PieceType::Pincer => vulnerable_pincing_positions.iter()
+                            .any(|end| coord.orthogonally_aligned(*end) &&
+                                       self.no_obstacles(*coord, *end)),
+                        // The Coordinator's allied King must be on the same rank or file, and
+                        // the Coordinator itself have a clear path to any squares with the reverse 
+                        // condition
+                        PieceType::Coordinator => {
+                            let enemy_king_position = self.get_king_position(side.flip()).unwrap();
+                            let mut eligible = None;
+                            if enemy_king_position.get_x() == king_position.get_x() {
+                                eligible.replace(CoordWalkInclusive::new(
+                                    Coord::new(0,             king_position.get_y()),
+                                    Coord::new(BOARD_WIDTH-1, king_position.get_y())));
+                            } else if enemy_king_position.get_y() == king_position.get_y() {
+                                eligible.replace(CoordWalkInclusive::new(
+                                    Coord::new(king_position.get_x(), 0),
+                                    Coord::new(king_position.get_x(), BOARD_HEIGHT-1)));
+                            }
+                            eligible.as_mut().map_or(false, |v|
+                                                     v.any(|c| self.no_obstacles(*coord, c)))
+                        },
+                        // Long Leapers must have a valid leaper path to the square behind the King
+                        PieceType::LongLeaper => king_position.pincing_coord(*coord).map_or(false,
+                            |c| p.is_valid_leaper_path(self, *coord, c)),
+                        // Withdrawers must be adjacent and can step at least 1 step back
+                        PieceType::Withdrawer => coord.is_adjacent(king_position) &&
+                            coord.pincing_coord(king_position)
+                            .map_or(false, |c| self.get_piece(c).is_none()),
+                        // Immobilizers can't capture
+                        PieceType::Immobilizer => false,
+                    };
+                    if is_vulnerable {
+                        return true;
+                    }
+                }
+            }
+            false
         }
 
         // For testing.
@@ -854,12 +952,14 @@ pub mod baroque {
             assert!(!coord1.diagonally_aligned(coord6));
         }
 
-        // See https://en.wikipedia.org/wiki/Baroque_chess for these exact test scenarios
+        // See https://en.wikipedia.org/wiki/Baroque_chess for these exact test scenarios, with
+        // small changes.
         // TODO:
         // - The type of the pieces being tested is not important aside from the
         // Chameleon tests; maybe add a generic type?
         // - Write a macro for putting pieces, with optional support for algebraic
         // notation
+
         #[test]
         fn test_pincer() {
             let mut board = Board::new_blank_board();
@@ -895,12 +995,15 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::Chameleon), Coord::new(7, 5));
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(6, 6));
             board.put_piece(Piece::new(Side::Black, PieceType::Pincer), Coord::new(7, 6));
+            assert!(!board.is_in_check(Side::Black));
             board = board.make_move(Coord::new(6, 5), Coord::new(3, 2)).0.unwrap();
             assert!(board.get_piece(Coord::new(7, 6)).is_none());
             assert!(board.get_piece(Coord::new(6, 6)).is_some());
             assert!(board.get_piece(Coord::new(7, 5)).is_some());
+            assert!(board.is_in_check(Side::Black));
         }
 
+        // The Black King is moved from g3 to g8 to check that it can be checked by the Leaper
         #[test]
         fn test_long_leaper() {
             let mut board = Board::new_blank_board();
@@ -917,13 +1020,15 @@ pub mod baroque {
             board.put_piece(Piece::new(Side::Black, PieceType::LongLeaper), Coord::new(3, 4));
             board.put_piece(Piece::new(Side::Black, PieceType::Coordinator), Coord::new(3, 6));
             board.put_piece(Piece::new(Side::Black, PieceType::Withdrawer), Coord::new(5, 3));
-            board.put_piece(Piece::new(Side::Black, PieceType::King), Coord::new(6, 2));
+            board.put_piece(Piece::new(Side::Black, PieceType::King), Coord::new(6, 7));
             assert!(board.make_move(Coord::new(3, 1), Coord::new(1, 3)).0.is_none());
             assert!(board.make_move(Coord::new(3, 1), Coord::new(7, 1)).0.is_none());
+            assert!(!board.is_in_check(Side::Black));
             board = board.make_move(Coord::new(3, 1), Coord::new(3, 7)).0.unwrap();
             assert!(board.get_piece(Coord::new(3, 2)).is_none());
             assert!(board.get_piece(Coord::new(3, 4)).is_none());
             assert!(board.get_piece(Coord::new(3, 6)).is_none());
+            assert!(board.is_in_check(Side::Black));
         }
 
         #[test]
@@ -1055,6 +1160,7 @@ pub mod baroque {
 pub mod players {
     use super::baroque::*;
     use std::io;
+    use std::cmp;
     use rand::seq::SliceRandom;
 
     fn read_line() -> io::Result<Vec<usize>> {
@@ -1134,8 +1240,6 @@ pub mod players {
             let mut current_value = None;
             let mut rng = rand::thread_rng();
             for (m, new_board) in board.get_possible_moves() {
-                // unwrap() because we are guaranteed the move is valid.
-                // (we want to panic if it's not the case et cetera.)
                 let new_value = new_board.get_value();
                 if new_value > *current_value.as_ref().unwrap_or(&(new_value-1)) {
                     valuable_moves_list.clear();
@@ -1146,6 +1250,56 @@ pub mod players {
                 }
             }
             valuable_moves_list.choose(&mut rng).cloned()
+        }
+    }
+
+    pub struct MinimaxAI {
+    }
+
+    impl Player for MinimaxAI {
+        fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
+            let mut valuable_moves_list = Vec::new();
+            let mut current_value = None;
+            let mut rng = rand::thread_rng();
+            for (m, new_board) in board.get_possible_moves() {
+                let new_value = self.minimax_value(&new_board, 1, false);
+                if new_value > *current_value.as_ref().unwrap_or(&(new_value-1)) {
+                    valuable_moves_list.clear();
+                    current_value.replace(new_value);
+                }
+                if new_value == *current_value.as_ref().unwrap_or(&new_value) {
+                    valuable_moves_list.push(m);
+                }
+            }
+            valuable_moves_list.choose(&mut rng).cloned()
+        }
+    }
+
+    impl MinimaxAI {
+        fn minimax_value(&self, board: &Board, depth: u8, is_maxing: bool) -> i32 {
+            let possible_moves = board.get_possible_moves();
+            if depth == 0 || possible_moves.is_empty() {
+                // we have to flip because the value function is always
+                // from the perspective of the current player.
+                // (both White and Black wants a max value board)
+                return match is_maxing {
+                    true => - board.get_value(),
+                    false => board.get_value(),
+                };
+            }
+            let mut value;
+            if is_maxing {
+                value = i32::min_value();
+                for (_, new_board) in possible_moves {
+                    value = cmp::max(value, self.minimax_value(&new_board, depth - 1, false))
+                }
+            } else {
+                value = i32::max_value();
+                for (_, new_board) in possible_moves {
+                    value = cmp::min(value, self.minimax_value(&new_board, depth - 1, true))
+                }
+            }
+            value
         }
     }
 }

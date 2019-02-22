@@ -5,7 +5,7 @@ use baroque::players::*;
 fn main() {
     let mut board = Board::new_board();
     let white = Human{};
-    let black = EagerAI{};
+    let black = MinimaxAI{};
     let mut current_player: &Player = &white; 
     loop {
         board.display();
@@ -25,9 +25,9 @@ fn main() {
             },
             None => {
                 if board.is_in_check(board.get_current_side()) {
-                    println!("Game is over; {} has won!", board.get_current_side().flip());
+                    println!("Checkmate; {} has won!", board.get_current_side().flip());
                 } else {
-                    println!("Game is over; it is a stalemate!");
+                    println!("Stalemate!");
                 }
                 break;
             }
