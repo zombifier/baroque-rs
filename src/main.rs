@@ -5,7 +5,8 @@ use baroque::players::*;
 fn main() {
     let mut board = Board::new_board();
     let white = Human{};
-    let black = MinimaxAI{};
+    //let white = MinimaxAI{side: Side::White, depth: 2};
+    let black = MinimaxAI{side: Side::Black, depth: 2};
     let mut current_player: &Player = &white; 
     loop {
         board.display();

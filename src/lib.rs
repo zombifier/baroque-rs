@@ -466,6 +466,7 @@ pub mod baroque {
             result
         }
 
+        // TODO: Communicate that stalemate is bad.
         pub fn get_value(&self) -> i32 {
             let mut result = 0;
             for (c, p) in self.squares.iter() {
@@ -482,10 +483,17 @@ pub mod baroque {
                 if p.is_immobilized(self, *c) {
                     value /= 2;
                 }
-                if p.get_side() == self.current_side {
+                if p.get_side() == Side::Black {
                     value = -value;
                 }
                 result += value;
+            }
+            // Reward the AI for checking the enemy. Once again, speculative.
+            if self.is_in_check(Side::Black) {
+                result += 500;
+            }
+            if self.is_in_check(Side::White) {
+                result -= 500;
             }
             result
         }
@@ -1225,81 +1233,73 @@ pub mod players {
         }
     }
 
-    pub struct EagerAI {
-    }
-
-    // This AI is slightly more sophisticated; it will consider the values of
-    // the pieces on the board, and only that. It will pick the move that will
-    // result in the board with the most value for itself; this means that if it
-    // can capture (or freeze a bunch of units) with a move then it will go for
-    // it immediately. If there are multiple moves that result in the same best
-    // possible outcome, pick one at random.
-    impl Player for EagerAI {
-        fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
-            let mut valuable_moves_list = Vec::new();
-            let mut current_value = None;
-            let mut rng = rand::thread_rng();
-            for (m, new_board) in board.get_possible_moves() {
-                let new_value = new_board.get_value();
-                if new_value > *current_value.as_ref().unwrap_or(&(new_value-1)) {
-                    valuable_moves_list.clear();
-                    current_value.replace(new_value);
-                } 
-                if new_value == *current_value.as_ref().unwrap_or(&new_value) {
-                    valuable_moves_list.push(m);
-                }
-            }
-            valuable_moves_list.choose(&mut rng).cloned()
-        }
-    }
-
     pub struct MinimaxAI {
+        pub side: Side,
+        pub depth: u8,
     }
 
+    // This AI uses minimax (with alpha-beta pruning) to search several moves
+    // ahead. It should prove to be a challenge. With depth = 1 it is essentially
+    // an eager AI that picks the best move without thinking ahead.
     impl Player for MinimaxAI {
         fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
-            let mut valuable_moves_list = Vec::new();
-            let mut current_value = None;
             let mut rng = rand::thread_rng();
-            for (m, new_board) in board.get_possible_moves() {
-                let new_value = self.minimax_value(&new_board, 1, false);
-                if new_value > *current_value.as_ref().unwrap_or(&(new_value-1)) {
-                    valuable_moves_list.clear();
-                    current_value.replace(new_value);
-                }
-                if new_value == *current_value.as_ref().unwrap_or(&new_value) {
-                    valuable_moves_list.push(m);
-                }
-            }
-            valuable_moves_list.choose(&mut rng).cloned()
+            let is_maxing = match self.side {
+                Side::White => true,
+                Side::Black => false,
+            };
+            self.minimax_value(board, self.depth, i32::min_value(), i32::max_value(), is_maxing).0
+                .choose(&mut rng).cloned()
+
         }
     }
 
     impl MinimaxAI {
-        fn minimax_value(&self, board: &Board, depth: u8, is_maxing: bool) -> i32 {
+        // Get the value of this board alongside a list of moves
+        // that could be made to lead to that value.
+        // TODO: The AI doesn't know stalemate is bad.
+        fn minimax_value(&self, board: &Board, depth: u8, alpha: i32, beta: i32, is_maxing: bool)
+            -> (Vec<(Coord, Coord)>, i32) {
             let possible_moves = board.get_possible_moves();
             if depth == 0 || possible_moves.is_empty() {
-                // we have to flip because the value function is always
-                // from the perspective of the current player.
-                // (both White and Black wants a max value board)
-                return match is_maxing {
-                    true => - board.get_value(),
-                    false => board.get_value(),
-                };
+                return (Vec::new(), board.get_value());
             }
             let mut value;
+            let mut moves_list = Vec::new();
             if is_maxing {
                 value = i32::min_value();
-                for (_, new_board) in possible_moves {
-                    value = cmp::max(value, self.minimax_value(&new_board, depth - 1, false))
+                for (m, new_board) in possible_moves {
+                    let new_value = self.minimax_value(&new_board, depth - 1, alpha, beta, false).1;
+                    if new_value > value {
+                        moves_list.clear();
+                        value = new_value;
+                    }
+                    if new_value == value {
+                        moves_list.push(m);
+                    }
+                    let alpha = cmp::max(alpha, value);
+                    if alpha >= beta {
+                        break;
+                    }
                 }
             } else {
                 value = i32::max_value();
-                for (_, new_board) in possible_moves {
-                    value = cmp::min(value, self.minimax_value(&new_board, depth - 1, true))
+                for (m, new_board) in possible_moves {
+                    let new_value = self.minimax_value(&new_board, depth - 1, alpha, beta, true).1;
+                    if new_value < value {
+                        moves_list.clear();
+                        value = new_value;
+                    }
+                    if new_value == value {
+                        moves_list.push(m);
+                    }
+                    let beta = cmp::min(beta, value);
+                    if alpha >= beta {
+                        break;
+                    }
                 }
             }
-            value
+            (moves_list, value)
         }
     }
 }
