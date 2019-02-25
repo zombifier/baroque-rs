@@ -279,10 +279,10 @@ pub mod baroque {
             }
 
             squares.insert(Coord::new(0, 0), Piece::new(Side::White, PieceType::Coordinator));
-            squares.insert(Coord::new(0, 7), Piece::new(Side::Black, PieceType::Coordinator));
+            squares.insert(Coord::new(7, 7), Piece::new(Side::Black, PieceType::Coordinator));
 
             squares.insert(Coord::new(7, 0), Piece::new(Side::White, PieceType::Immobilizer));
-            squares.insert(Coord::new(7, 7), Piece::new(Side::Black, PieceType::Immobilizer));
+            squares.insert(Coord::new(0, 7), Piece::new(Side::Black, PieceType::Immobilizer));
 
             squares.insert(Coord::new(1, 0), Piece::new(Side::White, PieceType::LongLeaper));
             squares.insert(Coord::new(1, 7), Piece::new(Side::Black, PieceType::LongLeaper));
@@ -466,14 +466,22 @@ pub mod baroque {
             result
         }
 
-        // TODO: Communicate that stalemate is bad.
-        pub fn get_value(&self) -> i32 {
+        /**
+         * Get the numeric value of a board. Higher is better for White and vice
+         * versa. If no_moves is supplied then consider that the current player
+         * has no moves, and the game will either end in a checkmate or a
+         * stalemate. We *could* do this check within the function itself but
+         * get_possible_moves is very computationally expensive, and the one
+         * other place that uses this function has already calculated it
+         * beforehand.
+         */
+        pub fn get_value(&self, no_moves: bool) -> i32 {
             let mut result = 0;
             for (c, p) in self.squares.iter() {
                 let mut value = match p.get_type() {
                     // These values are speculative.
                     PieceType::King => 900,
-                    PieceType::Pincer => 30,
+                    PieceType::Pincer => 15,
                     PieceType::Withdrawer => 30,
                     PieceType::LongLeaper => 50,
                     PieceType::Coordinator => 30,
@@ -481,7 +489,7 @@ pub mod baroque {
                     PieceType::Chameleon => 30,
                 };
                 if p.is_immobilized(self, *c) {
-                    value /= 2;
+                    value -= cmp::min(value/2, 20);
                 }
                 if p.get_side() == Side::Black {
                     value = -value;
@@ -489,11 +497,25 @@ pub mod baroque {
                 result += value;
             }
             // Reward the AI for checking the enemy. Once again, speculative.
-            if self.is_in_check(Side::Black) {
-                result += 500;
+            let white_checked = self.is_in_check(Side::White);
+            let black_checked = self.is_in_check(Side::Black);
+            if white_checked {
+                if no_moves {
+                    result -= 10000;
+                } else {
+                    result -= 500;
+                }
             }
-            if self.is_in_check(Side::White) {
-                result -= 500;
+            if black_checked {
+                if no_moves {
+                    result += 10000;
+                } else {
+                    result += 500;
+                }
+            }
+            // Stalemate is a no-win for either side.
+            if no_moves && !white_checked && !black_checked {
+                result = 0;
             }
             result
         }
@@ -1170,6 +1192,8 @@ pub mod players {
     use std::io;
     use std::cmp;
     use rand::seq::SliceRandom;
+    use std::sync::mpsc;
+    use std::thread;
 
     fn read_line() -> io::Result<Vec<usize>> {
         let mut result = Vec::new();
@@ -1257,12 +1281,11 @@ pub mod players {
     impl MinimaxAI {
         // Get the value of this board alongside a list of moves
         // that could be made to lead to that value.
-        // TODO: The AI doesn't know stalemate is bad.
         fn minimax_value(&self, board: &Board, depth: u8, alpha: i32, beta: i32, is_maxing: bool)
             -> (Vec<(Coord, Coord)>, i32) {
             let possible_moves = board.get_possible_moves();
             if depth == 0 || possible_moves.is_empty() {
-                return (Vec::new(), board.get_value());
+                return (Vec::new(), board.get_value(possible_moves.is_empty()));
             }
             let mut value;
             let mut moves_list = Vec::new();
@@ -1300,6 +1323,118 @@ pub mod players {
                 }
             }
             (moves_list, value)
+        }
+    }
+
+
+    pub struct MinimaxThreadedAI {
+        pub side: Side,
+        pub depth: u8,
+    }
+
+    impl Player for MinimaxThreadedAI {
+        fn play(&self, board: &Board) -> Option<(Coord, Coord)> {
+            let mut rng = rand::thread_rng();
+            let is_maxing = match self.side {
+                Side::White => true,
+                Side::Black => false,
+            };
+            self.minimax_value_top(board, self.depth, is_maxing).choose(&mut rng).cloned()
+        }
+    }
+
+    impl MinimaxThreadedAI {
+        // At the top layer use threads for faster execution.
+        fn minimax_value_top(&self, board: &Board, depth: u8, is_maxing: bool)
+            -> Vec<(Coord, Coord)> {
+            let possible_moves = board.get_possible_moves();
+            if depth == 0 || possible_moves.is_empty() {
+                return Vec::new();
+            }
+
+            let (tx, rx) = mpsc::channel();
+            let total_count = possible_moves.len();
+            let alpha = i32::min_value();
+            let beta = i32::max_value();
+            for (m, new_board) in possible_moves {
+                let tx1 = mpsc::Sender::clone(&tx);
+                thread::spawn(move || {
+                    let value = MinimaxThreadedAI::minimax_value(
+                        &new_board, depth - 1, alpha, beta, !is_maxing);
+                    tx1.send((m, value)).unwrap();
+                });
+            }
+            let mut count = 0;
+            let mut moves_list = Vec::new();
+            let mut value = match is_maxing {
+                true => i32::min_value(),
+                false => i32::max_value(),
+            };
+            while count < total_count {
+                let (m, new_value) = rx.recv().unwrap();
+                if is_maxing {
+                    if new_value > value {
+                        moves_list.clear();
+                        value = new_value;
+                    }
+                } else {
+                    if new_value < value {
+                        moves_list.clear();
+                        value = new_value;
+                    }
+                }
+                if new_value == value {
+                    moves_list.push(m);
+                }
+                count += 1;
+            }
+            moves_list
+        }
+
+        // Get the value of this board alongside a list of moves
+        // that could be made to lead to that value.
+        fn minimax_value(board: &Board, depth: u8, alpha: i32, beta: i32, is_maxing: bool)
+            -> i32 {
+            let possible_moves = board.get_possible_moves();
+            if depth == 0 || possible_moves.is_empty() {
+                return board.get_value(possible_moves.is_empty());
+            }
+            let mut value;
+            let mut moves_list = Vec::new();
+            if is_maxing {
+                value = i32::min_value();
+                for (m, new_board) in possible_moves {
+                    let new_value = MinimaxThreadedAI::minimax_value(&new_board, depth - 1, alpha, beta, false);
+                    if new_value > value {
+                        moves_list.clear();
+                        value = new_value;
+                    }
+                    if new_value == value {
+                        moves_list.push(m);
+                    }
+                    let alpha = cmp::max(alpha, value);
+                    if alpha >= beta {
+                        break;
+                    }
+                }
+            } else {
+                value = i32::max_value();
+                for (m, new_board) in possible_moves {
+                    let new_value = MinimaxThreadedAI::minimax_value(&new_board, depth - 1, alpha, beta, true);
+                    if new_value < value {
+                        moves_list.clear();
+                        value = new_value;
+                    }
+                    if new_value == value {
+                        moves_list.push(m);
+                    }
+                    let beta = cmp::min(beta, value);
+                    if alpha >= beta {
+                        break;
+                    }
+                }
+            }
+            value
         }
     }
 }
