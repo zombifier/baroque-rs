@@ -1189,11 +1189,13 @@ pub mod baroque {
 
 pub mod players {
     use super::baroque::*;
+    use super::thread_pool::*;
     use std::io;
     use std::cmp;
-    use rand::seq::SliceRandom;
+    use std::rc::Rc;
     use std::sync::mpsc;
-    use std::thread;
+    use std::sync::Mutex;
+    use rand::seq::SliceRandom;
 
     fn read_line() -> io::Result<Vec<usize>> {
         let mut result = Vec::new();
@@ -1258,8 +1260,8 @@ pub mod players {
     }
 
     pub struct MinimaxAI {
-        pub side: Side,
-        pub depth: u8,
+        side: Side,
+        depth: u8,
     }
 
     // This AI uses minimax (with alpha-beta pruning) to search several moves
@@ -1328,8 +1330,9 @@ pub mod players {
 
 
     pub struct MinimaxThreadedAI {
-        pub side: Side,
-        pub depth: u8,
+        side: Side,
+        depth: u8,
+        thread_pool: Rc<ThreadPool>,
     }
 
     impl Player for MinimaxThreadedAI {
@@ -1344,6 +1347,15 @@ pub mod players {
     }
 
     impl MinimaxThreadedAI {
+        pub fn new(side: Side, depth: u8, thread_pool: &Rc<ThreadPool>)
+            -> MinimaxThreadedAI {
+            MinimaxThreadedAI {
+                side,
+                depth,
+                thread_pool: Rc::clone(thread_pool),
+            }
+        }
+
         // At the top layer use threads for faster execution.
         fn minimax_value_top(&self, board: &Board, depth: u8, is_maxing: bool)
             -> Vec<(Coord, Coord)> {
@@ -1358,20 +1370,18 @@ pub mod players {
             let beta = i32::max_value();
             for (m, new_board) in possible_moves {
                 let tx1 = mpsc::Sender::clone(&tx);
-                thread::spawn(move || {
+                self.thread_pool.execute(move || {
                     let value = MinimaxThreadedAI::minimax_value(
                         &new_board, depth - 1, alpha, beta, !is_maxing);
                     tx1.send((m, value)).unwrap();
                 });
             }
-            let mut count = 0;
             let mut moves_list = Vec::new();
             let mut value = match is_maxing {
                 true => i32::min_value(),
                 false => i32::max_value(),
             };
-            while count < total_count {
-                let (m, new_value) = rx.recv().unwrap();
+            for (m, new_value) in rx.iter().take(total_count) {
                 if is_maxing {
                     if new_value > value {
                         moves_list.clear();
@@ -1386,7 +1396,6 @@ pub mod players {
                 if new_value == value {
                     moves_list.push(m);
                 }
-                count += 1;
             }
             moves_list
         }
@@ -1435,6 +1444,113 @@ pub mod players {
                 }
             }
             value
+        }
+    }
+}
+
+// Copied nearly verbatim from Rust book
+pub mod thread_pool {
+    use std::thread;
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    
+    enum Message {
+        NewJob(Job),
+        Terminate,
+    }
+
+    pub struct ThreadPool {
+        workers: Vec<Worker>,
+        sender: mpsc::Sender<Message>,
+    }
+
+    trait FnBox {
+        fn call_box(self: Box<Self>);
+    }
+
+    impl<F: FnOnce()> FnBox for F {
+        fn call_box(self: Box<F>) {
+            (*self)()
+        }
+    }
+
+    type Job = Box<dyn FnBox + Send + 'static>;
+    
+    impl ThreadPool {
+        /// Create a new ThreadPool.
+        ///
+        /// The size is the number of threads in the pool.
+        ///
+        /// # Panics
+        ///
+        /// The `new` function will panic if the size is zero.
+        pub fn new(size: usize) -> ThreadPool {
+            assert!(size > 0);
+
+            let (sender, receiver) = mpsc::channel();
+
+            let receiver = Arc::new(Mutex::new(receiver));
+
+            let mut workers = Vec::with_capacity(size);
+
+            for id in 0..size {
+                workers.push(Worker::new(id, Arc::clone(&receiver)));
+            }
+
+            ThreadPool {
+                workers,
+                sender,
+            }
+        }
+
+        pub fn execute<F>(&self, f: F) where F: FnOnce() + Send + 'static {
+            let job = Box::new(f);
+
+            self.sender.send(Message::NewJob(job)).unwrap();
+        }
+    }
+    
+    impl Drop for ThreadPool {
+        fn drop(&mut self) {
+            for _ in &mut self.workers {
+                self.sender.send(Message::Terminate).unwrap();
+            }
+
+            for worker in &mut self.workers {
+                if let Some(thread) = worker.thread.take() {
+                    thread.join().unwrap();
+                }
+            }
+        }
+    }
+
+    struct Worker {
+        id: usize,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+
+    impl Worker {
+        fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Message>>>) -> Worker {
+            let thread = thread::spawn(move ||{
+                loop {
+                    let message = receiver.lock().unwrap().recv().unwrap();
+
+                    match message {
+                        Message::NewJob(job) => {
+                            job.call_box();
+                        },
+                        Message::Terminate => {
+                            break;
+                        },
+                    }
+                }
+            });
+
+            Worker {
+                id,
+                thread: Some(thread),
+            }
         }
     }
 }

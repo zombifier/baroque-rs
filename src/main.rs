@@ -1,12 +1,16 @@
 extern crate baroque;
+use std::rc::Rc;
 use baroque::baroque::*;
 use baroque::players::*;
+use baroque::thread_pool::*;
 
 fn main() {
     let mut board = Board::new_board();
     //let white = Human{};
-    let white = MinimaxThreadedAI{side: Side::White, depth: 2};
-    let black = MinimaxThreadedAI{side: Side::Black, depth: 1};
+
+    let pool = Rc::new(ThreadPool::new(12));
+    let white = MinimaxThreadedAI::new(Side::White, 2, &pool);
+    let black = MinimaxThreadedAI::new(Side::Black, 1, &pool);
     let mut current_player: &Player = &white; 
     loop {
         board.display();
