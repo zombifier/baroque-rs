@@ -6,12 +6,18 @@ use baroque::thread_pool::*;
 
 fn main() {
     let mut board = Board::new_board();
-    let white = Human{};
-
     let pool = Rc::new(ThreadPool::new(12));
-    //let white = MinimaxThreadedAI::new(Side::White, 2, &pool);
-    let black = MinimaxThreadedAI::new(Side::Black, 3, &pool);
-    let mut current_player: &Player = &white; 
+    let white: Box<Player> =
+        match std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0) {
+            n if n > 0 && n < 3 => Box::new(MinimaxThreadedAI::new(Side::White, n, &pool)),
+            _ => Box::new(Human{}),
+        };
+    let black: Box<Player> =
+        match std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(0) {
+            n if n > 0 && n < 3 => Box::new(MinimaxThreadedAI::new(Side::Black, n, &pool)),
+            _ => Box::new(Human{}),
+        };
+    let mut current_player: &Player = &*white;
     loop {
         board.display();
         match current_player.play(&board) {
@@ -22,8 +28,8 @@ fn main() {
                 }
                 if let Some(new_board) = result.0 {
                     current_player = match board.get_current_side() {
-                        Side::Black => &white,
-                        Side::White => &black,
+                        Side::Black => &*white,
+                        Side::White => &*black,
                     };
                     board = new_board;
                 }
