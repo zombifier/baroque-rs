@@ -45,6 +45,19 @@ pub mod baroque {
             ]
         }
 
+        fn directions() -> Vec<Direction> {
+            vec![
+                Direction { vertical: NS::N, horizontal: EW::O },
+                Direction { vertical: NS::S, horizontal: EW::O },
+                Direction { vertical: NS::O, horizontal: EW::E },
+                Direction { vertical: NS::O, horizontal: EW::W },
+                Direction { vertical: NS::N, horizontal: EW::W },
+                Direction { vertical: NS::N, horizontal: EW::E },
+                Direction { vertical: NS::S, horizontal: EW::W },
+                Direction { vertical: NS::S, horizontal: EW::E },
+            ]
+        }
+
         fn get_opposite_direction(&self) -> Direction {
             Direction {
                 horizontal: match self.horizontal {
@@ -257,9 +270,34 @@ pub mod baroque {
         }
     }
 
+    struct CoordWalkDirection {
+        current: Coord,
+        direction: Direction,
+    }
+
+    impl CoordWalkDirection {
+        fn new(start: Coord, dir: Direction) -> Self {
+            CoordWalkDirection { current: start, direction: dir }
+        }
+    }
+
+    impl Iterator for CoordWalkDirection{
+        type Item = Coord;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if !self.direction.is_valid() {
+                return None;
+            }
+            self.current.adjacent_coord(self.direction).map(|c| {
+                self.current = c;
+                c
+            })
+        }
+    }
+
     pub struct Board {
         squares: HashMap<Coord, Piece>,
-        current_side: Side
+        current_side: Side,
     }
 
     impl Board {
@@ -451,15 +489,13 @@ pub mod baroque {
         }
 
         // Get a list of all possible moves and associated next board state.
+        // TODO: Optimize
         pub fn get_possible_moves(&self) -> HashMap<(Coord, Coord), Board> {
             let mut result = HashMap::new();
-            for (c, _) in self.squares.iter() {
-                for x in 0..BOARD_WIDTH {
-                    for y in 0..BOARD_HEIGHT {
-                        let end = Coord::new(x, y);
-                        if let Some(new_board) = self.make_move(*c, end).0 {
-                            result.insert((*c, end), new_board);
-                        }
+            for (c, p) in self.squares.iter() {
+                for end in p.get_possible_coords(*c) {
+                    if let Some(new_board) = self.make_move(*c, end).0 {
+                        result.insert((*c, end), new_board);
                     }
                 }
             }
@@ -502,15 +538,11 @@ pub mod baroque {
             if white_checked {
                 if no_moves {
                     result -= 10000;
-                } else {
-                    result -= 500;
                 }
             }
             if black_checked {
                 if no_moves {
                     result += 10000;
-                } else {
-                    result += 500;
                 }
             }
             // Stalemate is a no-win for either side.
@@ -826,6 +858,22 @@ pub mod baroque {
                     Some((piece, coord)) if !self.is_allied(piece) => vec![coord],
                     _ => Vec::new(),
                 }
+        }
+
+        /**
+         * Return a list of squares within this piece's movement rules.
+         * TODO: More optimization, integrate with check_valid_move
+         */
+        fn get_possible_coords(&self, position: Coord) -> Vec<Coord> {
+            match self.piece_type {
+                PieceType::King => position.get_neighboring_coords(),
+                PieceType::Pincer => Direction::cardinal_directions().into_iter()
+                    .map(|dir| CoordWalkDirection::new(position, dir).collect::<Vec<Coord>>())
+                    .flatten().collect(),
+                _ => Direction::directions().into_iter()
+                    .map(|dir| CoordWalkDirection::new(position, dir).collect::<Vec<Coord>>())
+                    .flatten().collect(),
+            }
         }
 
         /**
@@ -1194,7 +1242,6 @@ pub mod players {
     use std::cmp;
     use std::rc::Rc;
     use std::sync::mpsc;
-    use std::sync::Mutex;
     use rand::seq::SliceRandom;
 
     fn read_line() -> io::Result<Vec<usize>> {

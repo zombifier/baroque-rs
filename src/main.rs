@@ -6,11 +6,11 @@ use baroque::thread_pool::*;
 
 fn main() {
     let mut board = Board::new_board();
-    //let white = Human{};
+    let white = Human{};
 
     let pool = Rc::new(ThreadPool::new(12));
-    let white = MinimaxThreadedAI::new(Side::White, 2, &pool);
-    let black = MinimaxThreadedAI::new(Side::Black, 1, &pool);
+    //let white = MinimaxThreadedAI::new(Side::White, 2, &pool);
+    let black = MinimaxThreadedAI::new(Side::Black, 3, &pool);
     let mut current_player: &Player = &white; 
     loop {
         board.display();
